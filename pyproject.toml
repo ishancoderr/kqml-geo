@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kqml-messaging"
+version = "0.1.0"
+description = "KQML messaging shared package for multi-agent geospatial data retrieval"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["kqml_messaging"]
