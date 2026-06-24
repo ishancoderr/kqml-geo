@@ -102,6 +102,12 @@ class KQMLContent(BaseModel):
         return "empty"
 
 
+# ── Metadata ─────────────────────────────────────────────────────────────────
+
+class MessageMetadata(BaseModel):
+    token_usage: int
+
+
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 class KQMLMessage(BaseModel):
@@ -115,6 +121,7 @@ class KQMLMessage(BaseModel):
     content: KQMLContent = Field(default_factory=KQMLContent)
     reply_with: Optional[str] = None
     in_reply_to: Optional[str] = None
+    metadata: Optional[MessageMetadata] = None
 
 
 class AskMessage(KQMLMessage):
@@ -183,6 +190,7 @@ class MessageFactory:
         missing_slots: Optional[List[MissingSlot]] = None,
         language: Language = Language.GEOSQL,
         ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1,
+        metadata: Optional[MessageMetadata] = None,
     ) -> TellMessage:
         return TellMessage(
             sender=sender,
@@ -191,6 +199,7 @@ class MessageFactory:
             language=language,
             ontology=ontology,
             content=KQMLContent(found_slots=found_slots or [], missing_slots=missing_slots or []),
+            metadata=metadata,
         )
 
     @staticmethod
@@ -243,6 +252,7 @@ class PerformativeRegistry:
             content=content,
             reply_with=data.get("reply_with"),
             in_reply_to=data.get("in_reply_to"),
+            metadata=MessageMetadata(**data["metadata"]) if data.get("metadata") else None,
         )
         if msg_class is None:
             return KQMLMessage.model_construct(performative=perf, **common)

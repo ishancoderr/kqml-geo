@@ -28,6 +28,8 @@ class JSONSerializer:
             d["reply_with"] = message.reply_with
         if message.in_reply_to is not None:
             d["in_reply_to"] = message.in_reply_to
+        if message.metadata is not None:
+            d["metadata"] = message.metadata.model_dump()
         d["content"] = {
             "missing_slots": [
                 {"spatial": s.spatial, "temporal": s.temporal, "attributes": s.attributes}

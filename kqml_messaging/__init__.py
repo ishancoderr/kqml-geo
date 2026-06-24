@@ -2,6 +2,7 @@ from .core import (
     Language, MissingnessType, Ontology, Performative,
     DataRecord, FoundSlot, KQMLContent, MissingSlot,
     KQMLMessage, AskMessage, TellMessage,
+    MessageMetadata,
     MessageFactory, PerformativeRegistry,
     generate_request_id, generate_uuid_id,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "Performative", "Language", "Ontology", "MissingnessType",
     "DataRecord", "MissingSlot", "FoundSlot", "KQMLContent",
     "KQMLMessage", "AskMessage", "TellMessage",
+    "MessageMetadata",
     "MessageFactory", "PerformativeRegistry",
     "generate_request_id", "generate_uuid_id",
     "JSONSerializer", "KQMLTextSerializer",
