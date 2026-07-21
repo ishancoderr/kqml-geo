@@ -44,6 +44,19 @@ class JSONSerializer:
                 }
                 for s in message.content.found_slots
             ],
+            "missing_geometries": [
+                {"spatial_entity": s.spatial_entity, "entity_type": s.entity_type}
+                for s in message.content.missing_geometries
+            ],
+            "found_geometries": [
+                {
+                    "spatial_entity": s.spatial_entity,
+                    "entity_type": s.entity_type,
+                    "geometry": s.geometry,
+                    "srid": s.srid,
+                }
+                for s in message.content.found_geometries
+            ],
         }
         return d
 

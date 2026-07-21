@@ -1,6 +1,7 @@
 from .core import (
     Language, MissingnessType, Ontology, Performative,
     DataRecord, FoundSlot, KQMLContent, MissingSlot,
+    MissingGeometrySlot, FoundGeometrySlot,
     KQMLMessage, AskMessage, TellMessage,
     MessageMetadata,
     MessageFactory, PerformativeRegistry,
@@ -13,6 +14,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Performative", "Language", "Ontology", "MissingnessType",
     "DataRecord", "MissingSlot", "FoundSlot", "KQMLContent",
+    "MissingGeometrySlot", "FoundGeometrySlot",
     "KQMLMessage", "AskMessage", "TellMessage",
     "MessageMetadata",
     "MessageFactory", "PerformativeRegistry",

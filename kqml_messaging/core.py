@@ -83,11 +83,25 @@ class FoundSlot(BaseModel):
         return [self.spatial] if isinstance(self.spatial, str) else list(self.spatial)
 
 
+class MissingGeometrySlot(BaseModel):
+    spatial_entity: str
+    entity_type: str
+
+
+class FoundGeometrySlot(BaseModel):
+    spatial_entity: str
+    entity_type: str
+    geometry: str   # WKT e.g. "POINT(11.58 48.14)"
+    srid: int = 4326
+
+
 class KQMLContent(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     missing_slots: List[MissingSlot] = Field(default_factory=list, alias="missing-slots")
     found_slots: List[FoundSlot] = Field(default_factory=list, alias="found-slots")
+    missing_geometries: List[MissingGeometrySlot] = Field(default_factory=list, alias="missing-geometries")
+    found_geometries: List[FoundGeometrySlot] = Field(default_factory=list, alias="found-geometries")
 
     @property
     def status(self) -> str:
@@ -129,9 +143,9 @@ class AskMessage(KQMLMessage):
     reply_with: str = Field(...)
 
     @model_validator(mode="after")
-    def _require_missing_slots(self) -> AskMessage:
-        if not self.content.missing_slots:
-            raise ValueError("AskMessage must have at least one missing-slot")
+    def _require_content(self) -> AskMessage:
+        if not self.content.missing_slots and not self.content.missing_geometries:
+            raise ValueError("AskMessage must have at least one missing-slot or missing-geometry")
         return self
 
 
@@ -165,8 +179,9 @@ class MessageFactory:
     def ask(
         sender: str,
         receiver: str,
-        missing_slots: List[MissingSlot],
+        missing_slots: Optional[List[MissingSlot]] = None,
         *,
+        missing_geometries: Optional[List[MissingGeometrySlot]] = None,
         reply_with: Optional[str] = None,
         language: Language = Language.GEOSQL,
         ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1,
@@ -177,7 +192,10 @@ class MessageFactory:
             reply_with=reply_with or generate_request_id(),
             language=language,
             ontology=ontology,
-            content=KQMLContent(missing_slots=missing_slots),
+            content=KQMLContent(
+                missing_slots=missing_slots or [],
+                missing_geometries=missing_geometries or [],
+            ),
         )
 
     @staticmethod
@@ -188,6 +206,8 @@ class MessageFactory:
         *,
         found_slots: Optional[List[FoundSlot]] = None,
         missing_slots: Optional[List[MissingSlot]] = None,
+        found_geometries: Optional[List[FoundGeometrySlot]] = None,
+        missing_geometries: Optional[List[MissingGeometrySlot]] = None,
         language: Language = Language.GEOSQL,
         ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1,
         metadata: Optional[MessageMetadata] = None,
@@ -198,7 +218,12 @@ class MessageFactory:
             in_reply_to=in_reply_to,
             language=language,
             ontology=ontology,
-            content=KQMLContent(found_slots=found_slots or [], missing_slots=missing_slots or []),
+            content=KQMLContent(
+                found_slots=found_slots or [],
+                missing_slots=missing_slots or [],
+                found_geometries=found_geometries or [],
+                missing_geometries=missing_geometries or [],
+            ),
             metadata=metadata,
         )
 
@@ -223,6 +248,14 @@ class MessageFactory:
     @staticmethod
     def data_record(year: int, spatial: Optional[str] = None, **attrs: Any) -> DataRecord:
         return DataRecord(year=year, spatial=spatial, **attrs)
+
+    @staticmethod
+    def missing_geometry_slot(spatial_entity: str, entity_type: EntityType) -> MissingGeometrySlot:
+        return MissingGeometrySlot(spatial_entity=spatial_entity, entity_type=entity_type)
+
+    @staticmethod
+    def found_geometry_slot(spatial_entity: str, entity_type: EntityType, geometry: str, srid: int = 4326) -> FoundGeometrySlot:
+        return FoundGeometrySlot(spatial_entity=spatial_entity, entity_type=entity_type, geometry=geometry, srid=srid)
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -268,4 +301,11 @@ class PerformativeRegistry:
             )
             for s in raw.get("found_slots", [])
         ]
-        return KQMLContent(missing_slots=missing, found_slots=found)
+        missing_geom = [MissingGeometrySlot(**s) for s in raw.get("missing_geometries", [])]
+        found_geom = [FoundGeometrySlot(**s) for s in raw.get("found_geometries", [])]
+        return KQMLContent(
+            missing_slots=missing,
+            found_slots=found,
+            missing_geometries=missing_geom,
+            found_geometries=found_geom,
+        )
