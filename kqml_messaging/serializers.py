@@ -4,7 +4,10 @@ import json
 import re
 from typing import Any, Dict, List, Union
 
-from .core import DataRecord, FoundSlot, KQMLContent, KQMLMessage, MissingSlot, PerformativeRegistry
+from .core import (
+    DataRecord, FoundGeometrySlot, FoundSlot, KQMLContent, KQMLMessage,
+    MissingGeometrySlot, MissingSlot, PerformativeRegistry, SpatialQuery,
+)
 
 
 # ── JSON ──────────────────────────────────────────────────────────────────────
@@ -22,6 +25,7 @@ class JSONSerializer:
             "sender": message.sender,
             "receiver": message.receiver,
             "language": message.language.value,
+            "encoding": message.encoding.value,
             "ontology": message.ontology.value,
         }
         if message.reply_with is not None:
@@ -45,19 +49,32 @@ class JSONSerializer:
                 for s in message.content.found_slots
             ],
             "missing_geometries": [
-                {"spatial_entity": s.spatial_entity, "entity_type": s.entity_type}
+                {
+                    "spatial_entity": s.spatial_entity,
+                    "entity_type": s.entity_type.value,
+                    **({"miss_mode": s.miss_mode.value} if s.miss_mode is not None else {}),
+                }
                 for s in message.content.missing_geometries
             ],
             "found_geometries": [
                 {
                     "spatial_entity": s.spatial_entity,
-                    "entity_type": s.entity_type,
+                    "entity_type": s.entity_type.value,
                     "geometry": s.geometry,
                     "srid": s.srid,
                 }
                 for s in message.content.found_geometries
             ],
         }
+        if message.content.spatial_query is not None:
+            sq = message.content.spatial_query
+            d["content"]["spatial_query"] = {
+                "topic": sq.topic,
+                "geometry": sq.geometry,
+                "srid": sq.srid,
+                "target_entity": sq.target_entity.value,
+                "exclude": sq.exclude,
+            }
         return d
 
     @staticmethod
@@ -87,6 +104,7 @@ class KQMLTextSerializer:
         if message.in_reply_to is not None:
             lines.append(f'{pad} :in-reply-to "{message.in_reply_to}"')
         lines.append(f'{pad} :language "{message.language.value}"')
+        lines.append(f'{pad} :encoding "{message.encoding.value}"')
         lines.append(f'{pad} :ontology "{message.ontology.value}"')
         lines.append(f"{pad} :content (")
         lines.extend(cls._content_to_kqml(message.content, indent_level + 2))
@@ -107,13 +125,17 @@ class KQMLTextSerializer:
         content_text = cls._extract_paren_block(text, ":content")
         missing_slots = cls._parse_missing_slots(content_text)
         found_slots = cls._parse_found_slots(content_text)
+        missing_geometries = cls._parse_missing_geometries(content_text)
+        found_geometries = cls._parse_found_geometries(content_text)
+        spatial_query = cls._parse_spatial_query(content_text)
 
         return PerformativeRegistry.from_dict({
             "performative": perf_match.group(1),
             "sender": extract("sender") or "",
             "receiver": extract("receiver") or "",
-            "language": extract("language") or "GeoSQL",
-            "ontology": extract("ontology") or "German-Geostats-v1",
+            "language": extract("language") or "GeoKQML",
+            "encoding": extract("encoding") or "JSON",
+            "ontology": extract("ontology") or "geo-missingness-v2",
             "reply_with": extract("reply-with"),
             "in_reply_to": extract("in-reply-to"),
             "content": {
@@ -126,6 +148,22 @@ class KQMLTextSerializer:
                      "data": [r.to_flat_dict() for r in s.data]}
                     for s in found_slots
                 ],
+                "missing_geometries": [
+                    {"spatial_entity": s.spatial_entity, "entity_type": s.entity_type.value}
+                    for s in missing_geometries
+                ],
+                "found_geometries": [
+                    {"spatial_entity": s.spatial_entity, "entity_type": s.entity_type.value,
+                     "geometry": s.geometry, "srid": s.srid}
+                    for s in found_geometries
+                ],
+                **({"spatial_query": {
+                    "topic": spatial_query.topic,
+                    "geometry": spatial_query.geometry,
+                    "srid": spatial_query.srid,
+                    "target_entity": spatial_query.target_entity.value,
+                    "exclude": spatial_query.exclude,
+                }} if spatial_query is not None else {}),
             },
         })
 
@@ -151,6 +189,35 @@ class KQMLTextSerializer:
                     slot_lines[-1] += ","
                 lines.extend(slot_lines)
             lines.append(f"{pad}]")
+        if content.missing_geometries:
+            lines.append(f"{pad}:missing-geometries [")
+            for i, slot in enumerate(content.missing_geometries):
+                line = f"{pad} {{spatial-entity: \"{slot.spatial_entity}\", entity-type: \"{slot.entity_type.value}\"}}"
+                if i < len(content.missing_geometries) - 1:
+                    line += ","
+                lines.append(line)
+            lines.append(f"{pad}]")
+        if content.found_geometries:
+            lines.append(f"{pad}:found-geometries [")
+            for i, slot in enumerate(content.found_geometries):
+                line = (
+                    f"{pad} {{spatial-entity: \"{slot.spatial_entity}\", entity-type: \"{slot.entity_type.value}\", "
+                    f"srid: {slot.srid}, geometry: \"{slot.geometry}\"}}"
+                )
+                if i < len(content.found_geometries) - 1:
+                    line += ","
+                lines.append(line)
+            lines.append(f"{pad}]")
+        if content.spatial_query is not None:
+            sq = content.spatial_query
+            exclude = ", ".join(f'"{e}"' for e in sq.exclude)
+            lines.append(f"{pad}:spatial-query {{")
+            lines.append(f'{pad} topic: "{sq.topic}",')
+            lines.append(f'{pad} target-entity: "{sq.target_entity.value}",')
+            lines.append(f"{pad} srid: {sq.srid},")
+            lines.append(f'{pad} geometry: "{sq.geometry}",')
+            lines.append(f"{pad} exclude: [{exclude}]")
+            lines.append(f"{pad}}}")
         return lines
 
     @classmethod
@@ -260,6 +327,68 @@ class KQMLTextSerializer:
                 temporal=cls._parse_int_list(obj, "temporal"),
                 attributes=cls._parse_str_list(obj, "attributes"),
                 data=records,
+            ))
+        return slots
+
+    @classmethod
+    def _parse_spatial_query(cls, content_text: str):
+        m = re.search(r":spatial-query\s*\{", content_text, re.DOTALL)
+        if not m:
+            return None
+        depth, pos = 1, m.end()
+        while pos < len(content_text) and depth > 0:
+            if content_text[pos] == "{":
+                depth += 1
+            elif content_text[pos] == "}":
+                depth -= 1
+            pos += 1
+        obj = content_text[m.end(): pos - 1]
+
+        topic = re.search(r'topic:\s*"([^"]+)"', obj)
+        target_entity = re.search(r'target-entity:\s*"([^"]+)"', obj)
+        srid = re.search(r"srid:\s*(-?\d+)", obj)
+        geometry = re.search(r'geometry:\s*"([^"]+)"', obj)
+        exclude = cls._parse_str_list(obj, "exclude")
+
+        return SpatialQuery(
+            topic=topic.group(1) if topic else "",
+            geometry=geometry.group(1) if geometry else "",
+            srid=int(srid.group(1)) if srid else 4326,
+            target_entity=target_entity.group(1) if target_entity else "city",
+            exclude=exclude,
+        )
+
+    @classmethod
+    def _parse_missing_geometries(cls, content_text: str) -> List[MissingGeometrySlot]:
+        block = cls._extract_bracket_block(content_text, "missing-geometries")
+        if block is None:
+            return []
+        slots = []
+        for obj in cls._split_objects(block):
+            entity = re.search(r'spatial-entity:\s*"([^"]+)"', obj)
+            etype = re.search(r'entity-type:\s*"([^"]+)"', obj)
+            slots.append(MissingGeometrySlot(
+                spatial_entity=entity.group(1) if entity else "",
+                entity_type=etype.group(1) if etype else "state",
+            ))
+        return slots
+
+    @classmethod
+    def _parse_found_geometries(cls, content_text: str) -> List[FoundGeometrySlot]:
+        block = cls._extract_bracket_block(content_text, "found-geometries")
+        if block is None:
+            return []
+        slots = []
+        for obj in cls._split_objects(block):
+            entity = re.search(r'spatial-entity:\s*"([^"]+)"', obj)
+            etype = re.search(r'entity-type:\s*"([^"]+)"', obj)
+            srid = re.search(r'srid:\s*(-?\d+)', obj)
+            geom = re.search(r'geometry:\s*"([^"]+)"', obj)
+            slots.append(FoundGeometrySlot(
+                spatial_entity=entity.group(1) if entity else "",
+                entity_type=etype.group(1) if etype else "state",
+                geometry=geom.group(1) if geom else "",
+                srid=int(srid.group(1)) if srid else 4326,
             ))
         return slots
 

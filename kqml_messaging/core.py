@@ -16,15 +16,45 @@ class Performative(str, Enum):
 
 class Language(str, Enum):
     GEOSQL = "GeoSQL"
+    GEOKQML = "GeoKQML"
+
+class Encoding(str, Enum):
+    JSON = "JSON"
 
 class Ontology(str, Enum):
     GERMAN_GEOSTATS_V1 = "German-Geostats-v1"
+    GEO_MISSINGNESS_V2 = "geo-missingness-v2"
 
 class MissingnessType(str, Enum):
     ATTRIBUTE = "attribute"
     TEMPORAL = "temporal"
     SPATIAL = "spatial"
     MIXED = "mixed"
+
+class EntityType(str, Enum):
+    CITY = "city"
+    STATE = "state"
+
+class GeometryMissMode(str, Enum):
+    UNKNOWN_FEATURE = "unknown-feature"   # no row at all
+    GEOMETRY_NULL = "geometry-null"       # row exists, shape column empty
+
+class SpatialOperation(str, Enum):
+    UNION = "Union"
+    INTERSECTION = "Intersection"
+    DIFFERENCE = "Difference"
+    SYM_DIFFERENCE = "SymDifference"
+
+class SpatialRelationship(str, Enum):
+    TOUCHES = "touches"
+    NORTH_OF = "north_of"
+    WITHIN_DISTANCE = "within_distance"
+
+class TernaryResult(int, Enum):
+    """Three-valued relationship outcome: a null input must not collapse into False."""
+    UNKNOWN = -1
+    FALSE = 0
+    TRUE = 1
 
 
 # ── Data models ───────────────────────────────────────────────────────────────
@@ -85,14 +115,27 @@ class FoundSlot(BaseModel):
 
 class MissingGeometrySlot(BaseModel):
     spatial_entity: str
-    entity_type: str
+    entity_type: EntityType
+    miss_mode: Optional[GeometryMissMode] = None  # local diagnosis only, never required on the wire
 
 
 class FoundGeometrySlot(BaseModel):
     spatial_entity: str
-    entity_type: str
+    entity_type: EntityType
     geometry: str   # WKT e.g. "POINT(11.58 48.14)"
     srid: int = 4326
+
+
+class SpatialQuery(BaseModel):
+    """The :spatial-query content of an `ask` message (Scenario 21): a shape is sent
+    because the targets that satisfy it cannot be named in advance."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    topic: str                       # e.g. "Within"
+    geometry: str                    # WKT of the constructed shape, e.g. a buffer zone
+    srid: int = 4326
+    target_entity: EntityType = Field(alias="target-entity")
+    exclude: List[str] = Field(default_factory=list)
 
 
 class KQMLContent(BaseModel):
@@ -102,6 +145,7 @@ class KQMLContent(BaseModel):
     found_slots: List[FoundSlot] = Field(default_factory=list, alias="found-slots")
     missing_geometries: List[MissingGeometrySlot] = Field(default_factory=list, alias="missing-geometries")
     found_geometries: List[FoundGeometrySlot] = Field(default_factory=list, alias="found-geometries")
+    spatial_query: Optional[SpatialQuery] = Field(default=None, alias="spatial-query")
 
     @property
     def status(self) -> str:
@@ -130,8 +174,9 @@ class KQMLMessage(BaseModel):
     performative: Performative
     sender: str
     receiver: str
-    language: Language = Language.GEOSQL
-    ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1
+    language: Language = Language.GEOKQML
+    encoding: Encoding = Encoding.JSON
+    ontology: Ontology = Ontology.GEO_MISSINGNESS_V2
     content: KQMLContent = Field(default_factory=KQMLContent)
     reply_with: Optional[str] = None
     in_reply_to: Optional[str] = None
@@ -144,8 +189,16 @@ class AskMessage(KQMLMessage):
 
     @model_validator(mode="after")
     def _require_content(self) -> AskMessage:
-        if not self.content.missing_slots and not self.content.missing_geometries:
-            raise ValueError("AskMessage must have at least one missing-slot or missing-geometry")
+        # Scenario 21 sends a :spatial-query instead of a named missing-slot/geometry,
+        # when the targets that would satisfy the query cannot be named in advance.
+        if (
+            not self.content.missing_slots
+            and not self.content.missing_geometries
+            and self.content.spatial_query is None
+        ):
+            raise ValueError(
+                "AskMessage must have at least one missing-slot, missing-geometry, or spatial-query"
+            )
         return self
 
 
@@ -183,8 +236,8 @@ class MessageFactory:
         *,
         missing_geometries: Optional[List[MissingGeometrySlot]] = None,
         reply_with: Optional[str] = None,
-        language: Language = Language.GEOSQL,
-        ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1,
+        language: Language = Language.GEOKQML,
+        ontology: Ontology = Ontology.GEO_MISSINGNESS_V2,
     ) -> AskMessage:
         return AskMessage(
             sender=sender,
@@ -208,8 +261,8 @@ class MessageFactory:
         missing_slots: Optional[List[MissingSlot]] = None,
         found_geometries: Optional[List[FoundGeometrySlot]] = None,
         missing_geometries: Optional[List[MissingGeometrySlot]] = None,
-        language: Language = Language.GEOSQL,
-        ontology: Ontology = Ontology.GERMAN_GEOSTATS_V1,
+        language: Language = Language.GEOKQML,
+        ontology: Ontology = Ontology.GEO_MISSINGNESS_V2,
         metadata: Optional[MessageMetadata] = None,
     ) -> TellMessage:
         return TellMessage(
@@ -225,6 +278,41 @@ class MessageFactory:
                 missing_geometries=missing_geometries or [],
             ),
             metadata=metadata,
+        )
+
+    @staticmethod
+    def ask_spatial_query(
+        sender: str,
+        receiver: str,
+        spatial_query: SpatialQuery,
+        *,
+        reply_with: Optional[str] = None,
+        language: Language = Language.GEOKQML,
+        ontology: Ontology = Ontology.GEO_MISSINGNESS_V2,
+    ) -> AskMessage:
+        """Scenario 21: ask the peer to test its own catalogue against a constructed
+        shape, because the targets that satisfy it cannot be named in advance."""
+        return AskMessage(
+            sender=sender,
+            receiver=receiver,
+            reply_with=reply_with or generate_request_id(),
+            language=language,
+            ontology=ontology,
+            content=KQMLContent(spatial_query=spatial_query),
+        )
+
+    @staticmethod
+    def spatial_query(
+        topic: str,
+        geometry: str,
+        target_entity: EntityType,
+        *,
+        srid: int = 4326,
+        exclude: Optional[List[str]] = None,
+    ) -> SpatialQuery:
+        return SpatialQuery(
+            topic=topic, geometry=geometry, srid=srid,
+            target_entity=target_entity, exclude=exclude or [],
         )
 
     @staticmethod
@@ -250,12 +338,35 @@ class MessageFactory:
         return DataRecord(year=year, spatial=spatial, **attrs)
 
     @staticmethod
-    def missing_geometry_slot(spatial_entity: str, entity_type: EntityType) -> MissingGeometrySlot:
-        return MissingGeometrySlot(spatial_entity=spatial_entity, entity_type=entity_type)
+    def missing_geometry_slot(
+        spatial_entity: str,
+        entity_type: EntityType,
+        miss_mode: Optional[GeometryMissMode] = None,
+    ) -> MissingGeometrySlot:
+        return MissingGeometrySlot(spatial_entity=spatial_entity, entity_type=entity_type, miss_mode=miss_mode)
 
     @staticmethod
     def found_geometry_slot(spatial_entity: str, entity_type: EntityType, geometry: str, srid: int = 4326) -> FoundGeometrySlot:
         return FoundGeometrySlot(spatial_entity=spatial_entity, entity_type=entity_type, geometry=geometry, srid=srid)
+
+
+# ── Spatial operation / relationship helpers ────────────────────────────────
+# Both agents run the same code, so an operation or relationship is never itself
+# missing (Section 3.5) — only an input shape can be. These helpers assume the
+# two shapes are already present locally.
+
+def check_srid_agreement(local_srid: int, received_srid: int) -> None:
+    """An operation on shapes held in different reference systems is an error.
+    Checked before the operation runs, per Section 3, rather than after it fails."""
+    if local_srid != received_srid:
+        raise ValueError(
+            f"SRID mismatch: local geometry is {local_srid}, received geometry is {received_srid}"
+        )
+
+
+def gap_signature(spatial: bool, temporal: bool, thematic: bool) -> tuple[int, int, int]:
+    """The (S, T, A) flag pattern of Section 1.5, one flag per dimension."""
+    return (int(spatial), int(temporal), int(thematic))
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -280,8 +391,9 @@ class PerformativeRegistry:
         common = dict(
             sender=data.get("sender", ""),
             receiver=data.get("receiver", ""),
-            language=data.get("language", "GeoSQL"),
-            ontology=data.get("ontology", "German-Geostats-v1"),
+            language=data.get("language", "GeoKQML"),
+            encoding=data.get("encoding", "JSON"),
+            ontology=data.get("ontology", "geo-missingness-v2"),
             content=content,
             reply_with=data.get("reply_with"),
             in_reply_to=data.get("in_reply_to"),
@@ -303,9 +415,12 @@ class PerformativeRegistry:
         ]
         missing_geom = [MissingGeometrySlot(**s) for s in raw.get("missing_geometries", [])]
         found_geom = [FoundGeometrySlot(**s) for s in raw.get("found_geometries", [])]
+        spatial_query_raw = raw.get("spatial_query") or raw.get("spatial-query")
+        spatial_query = SpatialQuery(**spatial_query_raw) if spatial_query_raw else None
         return KQMLContent(
             missing_slots=missing,
             found_slots=found,
             missing_geometries=missing_geom,
             found_geometries=found_geom,
+            spatial_query=spatial_query,
         )

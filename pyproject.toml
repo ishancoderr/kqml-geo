@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kqml-messaging"
-version = "0.1.0"
+version = "2.0.0"
 description = "KQML messaging shared package for multi-agent geospatial data retrieval"
 requires-python = ">=3.10"
 dependencies = [
