@@ -7,7 +7,7 @@ from .core import (
     MessageMetadata,
     MessageFactory, PerformativeRegistry,
     generate_request_id, generate_uuid_id,
-    check_srid_agreement, gap_signature,
+    check_srid_agreement, gap_signature, response_status,
 )
 from .serializers import JSONSerializer, KQMLTextSerializer
 
@@ -22,6 +22,6 @@ __all__ = [
     "MessageMetadata",
     "MessageFactory", "PerformativeRegistry",
     "generate_request_id", "generate_uuid_id",
-    "check_srid_agreement", "gap_signature",
+    "check_srid_agreement", "gap_signature", "response_status",
     "JSONSerializer", "KQMLTextSerializer",
 ]

@@ -138,6 +138,31 @@ class SpatialQuery(BaseModel):
     exclude: List[str] = Field(default_factory=list)
 
 
+def response_status(has_found: bool, has_missing: bool) -> str:
+    """The canonical outcome vocabulary: complete, partial-complete, not-found,
+    or empty when there was nothing to look up at all. This is the exact
+    wording the document's own scenario summaries use throughout (Scenario 1:
+    "status = complete", Scenarios 2-7: "status = partial-complete", Scenario
+    8: "status = not-found").
+
+    Every controller-facing response - a data lookup, a geometry lookup, a
+    constructive operation, a relationship buffer - reduces to the same two
+    booleans (was anything found, is anything still missing), so every one of
+    them should derive its status from this one function rather than
+    reimplementing the four-way branch by hand. That hand-rolling is exactly
+    how "partial" (no hyphen) and "not_found" (underscore) drifted from this
+    vocabulary in the first place: the same logic, copied instead of shared,
+    spelled slightly differently each time it was copied.
+    """
+    if has_found and not has_missing:
+        return "complete"
+    if has_found and has_missing:
+        return "partial-complete"
+    if not has_found and has_missing:
+        return "not-found"
+    return "empty"
+
+
 class KQMLContent(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -149,15 +174,7 @@ class KQMLContent(BaseModel):
 
     @property
     def status(self) -> str:
-        has_found = bool(self.found_slots)
-        has_missing = bool(self.missing_slots)
-        if has_found and not has_missing:
-            return "complete"
-        if has_found and has_missing:
-            return "partial-complete"
-        if not has_found and has_missing:
-            return "not-found"
-        return "empty"
+        return response_status(bool(self.found_slots), bool(self.missing_slots))
 
 
 # ── Metadata ─────────────────────────────────────────────────────────────────
