@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local test harness: question workbooks, run results, raw responses
+# (kept out of the repo - large xlsx/jsonl artifacts and local-only run data)
+kqml_messaging/test/
